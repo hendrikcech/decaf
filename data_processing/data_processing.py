@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 import numpy as np 
 from time import time, sleep
 from keras.preprocessing.image import ImageDataGenerator, array_to_img, img_to_array, load_img, DirectoryIterator
@@ -11,7 +12,7 @@ from PIL import Image, ImageEnhance
 import pytesseract
 from datetime import datetime
 from statistics import mean, stdev, median
-from multiprocessing import Process, Manager, Pool
+from multiprocessing import Process, Manager, Pool, cpu_count
 
 
 args = sys.argv[1:]
@@ -406,7 +407,7 @@ def process_rtcStatsCollector_log(path):
 
 
 enhancer_set = 1
-location = ""
+location = "munich"
 
 def data_loading(data_path, game):
 	# Predetermined variables
@@ -490,93 +491,112 @@ number_l     = ["4", "0", "0", "8", "1", "5", "0"]
 
 
 def generate_extracted_frames_timestamp_dictionary_multiprocessing(args):
-
+	path = args[0]
+	file = args[1]
+	val_d = args[2]
 
 	## TIMESTAMP CONVERTION W.R.T UTC
 	## Timestamps are recorded by FFmpeg and python are wrt to local time of the location
 	# However, python converts it into UTC. Therefore, we have to ADD the offset for western location wrt to UTC
 
-	# Raleigh, Boston +4
-	EST = 14400.00
-
-	
-	if location == "sanjose":
-		# +7
-		EST = 25200.00
-	elif location == "dallas":
-		# +5
-		EST = 18000.00
+	try:
+		# Raleigh, Boston +4
+		EST = 14400.00
 
 
-	path = args[0]
-	file = args[1]
-	val_d = args[2]
+		if location == "sanjose":
+			# +7
+			EST = 25200.00
+		elif location == "dallas":
+			# +5
+			EST = 18000.00
+		elif location == "munich":
+			EST = float(-2*60*60)
 
-
-	skip_flag = 0
-
-	img = Image.open(path+file+".png")
-	img = img.crop((0, 0, 300, 37)) 
-	newsize = (1500, 200)
-	img = img.resize(newsize)
-
-	enhancer = ImageEnhance.Contrast(img)
-	factor = 6 #increase contrast
-	img = enhancer.enhance(factor)
-
-	text = pytesseract.image_to_string(img, lang='eng', config='--psm 6')
-	text = text.split()
-	# print(file, temp)
-
-	date = ""
-	time = ""
-
-
-	if len(text) == 4:
-		date = text[0]
-		time = "{}.{}".format(text[1], text[2])
-
-
-	elif len(text) == 3:
-		date = text[0].split("-")
-		time = text[1].split(":")
-		millisecond = text[2]
-
-		if len(date) == 3 and len(time) == 3 and len(time[2]) == 2:
-			date = text[0]
-			time = "{}.{}".format(text[1], text[2])
-	else:
-		skip_flag = 1
-
-
-
-	if skip_flag == 0:				
-
-		ts = date+"~"+time
-
-		# Fix characters in the text
-		for j, char in enumerate(characters_l):
-			if ts.find(char) >= 0:
-				tmp_ts =  "Character found: {}".format(ts)
-				ts = ts.replace(char, number_l[j])
-				# print(tmp_ts, "Replaced: ", ts)
-				# print("Character found: ", ts, "Replaced: ", ts)
+		skip_flag = 0
 
 		try:
-			utc_time = datetime.strptime(ts, "%Y-%m-%d~%H:%M:%S.%f")
-			epoch_time = float((utc_time - datetime(1970, 1, 1)).total_seconds())
-			val_d[str(file)] = [text, float(epoch_time+EST)]
-
+			img = Image.open(path+file+".png")
+			img = img.crop((0, 0, 300, 37))
+			newsize = (1500, 200)
+			img = img.resize(newsize)
 		except Exception as e:
-			print("utc failor at ts {}. Reason {}".format(ts, e))
-			print("skipped", text, file, "\n")
+			print("Failed to crop/resize " + path+file+".png")
+			print(e)
+			return
 
+		try:
+			enhancer = ImageEnhance.Contrast(img)
+			factor = 6 #increase contrast
+			img = enhancer.enhance(factor)
+		except Exception as e:
+			print("enhancer failed: " + path+file+".png")
+			print(e)
+			return
+
+		try:
+			text = pytesseract.image_to_string(img, lang='eng', config='--psm 6')
+			text = text.split()
+			# print(file, temp)
+		except Exception as e:
+			print("pytesseract.image_to_string failed: " + path+file+".png")
+			print(e)
+			return
+
+		date = ""
+		time = ""
+
+
+		if len(text) == 4:
+			date = text[0]
+			time = "{}.{}".format(text[1], text[2])
+
+
+		elif len(text) == 3:
+			date = text[0].split("-")
+			time = text[1].split(":")
+			millisecond = text[2]
+
+			if len(date) == 3 and len(time) == 3 and len(time[2]) == 2:
+				date = text[0]
+				time = "{}.{}".format(text[1], text[2])
+		else:
+			skip_flag = 1
+
+
+
+		if skip_flag == 0:
+
+			ts = date+"~"+time
+
+			# Fix characters in the text
+			for j, char in enumerate(characters_l):
+				if ts.find(char) >= 0:
+					tmp_ts =  "Character found: {}".format(ts)
+					ts = ts.replace(char, number_l[j])
+					# print(tmp_ts, "Replaced: ", ts)
+					# print("Character found: ", ts, "Replaced: ", ts)
+
+			try:
+				utc_time = datetime.strptime(ts, "%Y-%m-%d~%H:%M:%S.%f")
+				epoch_time = float((utc_time - datetime(1970, 1, 1)).total_seconds())
+				val_d[str(file)] = [text, float(epoch_time+EST)]
+
+			except Exception as e:
+				print("utc failor at ts {}. Reason {}".format(ts, e))
+				print("skipped", text, file, "\n")
+
+				val_d[str(file)] = [text, "skipped"]
+
+		else:
+			print("skipped len:", text, file)
 			val_d[str(file)] = [text, "skipped"]
 
-	else:
-		print("skipped len:", text, file)
-		val_d[str(file)] = [text, "skipped"]
-
+	except Exception as e:
+		print("Failed processing " + path+file+".png")
+		print(e)
+		return
+	print("Finished " + path+file+".png")
 
 
 
@@ -703,7 +723,7 @@ def process_game_recording(path, param_dict):
 					d[str(file)] = []
 					args_l.append((extracted_frames_path, str(file), d))
 
-				pool = Pool(2)
+				pool = Pool(cpu_count())
 				results = pool.map(generate_extracted_frames_timestamp_dictionary_multiprocessing, args_l)
 
 				# Generate output dictionary
@@ -755,6 +775,3 @@ if __name__ == "__main__":
 		process_videoReceiveStream_log(path[0])
 		process_rtcStatsCollector_log(path[0])
 		process_game_recording(path, param_dict)
-
-
-	
